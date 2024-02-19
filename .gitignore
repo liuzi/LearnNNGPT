@@ -1,6 +1,6 @@
 ## sensitive data files
 *.docx
-RAG/*.pdf
+papers/RAG
 input/
 output/
 *.out
