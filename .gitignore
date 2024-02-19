@@ -1,5 +1,6 @@
 ## sensitive data files
 *.docx
+RAG/*.pdf
 input/
 output/
 *.out
