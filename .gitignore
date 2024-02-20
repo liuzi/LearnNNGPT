@@ -5,6 +5,7 @@ input/
 output/
 *.out
 logs/
+.DS_Store
 
 ## !!!important sensitive configure files
 *.ini
