@@ -4,14 +4,17 @@ from torch.nn import functional as F
 
 ## TODO: convert to self-attention model 1:02:47
 # hyperparameters
-batch_size = 32 # how many independent sequences will we process in parallel?
-block_size = 8 # what is the maximum context length for predictions?
+batch_size = 64 #32 # how many independent sequences will we process in parallel?
+block_size = 256 #8 # what is the maximum context length for predictions?
 max_iters = 5000 #3000: increse since learning rate is lower
 eval_interval = 500 #300
-learning_rate = 1e-3 #1e-2 self attention cant't tolerate very high learning rate
+learning_rate = 3e-4 #1e-3 #1e-2 self attention cant't tolerate very high learning rate
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embed = 32#128
+n_embed = 384#32#128
+n_head = 6
+n_layer = 6
+dropout = 0.2 # 20% of intermediate calculations will be disabled/zeroed
 # ------------
 
 torch.manual_seed(1337)
@@ -72,6 +75,8 @@ class Head(nn.Module):
         ## lower triangular matrix
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
+        self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         # input of size (batch, time-step, channels)
         # output of size (batch, time-step, head size)
@@ -83,6 +88,7 @@ class Head(nn.Module):
         ## decoder blocl, feature doesn't communicate with the past
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T), higher triangular mask
         wei = F.softmax(wei, dim=-1) # (B, T, T)
+        wei = self.dropout(wei)
         # perform the weighted aggregation of the values
         v = self.value(x) # (B,T,C) -> (B,T,H)
         out = wei @ v # (B,T,T) @ (B,T,H) -> (B,T,H)
@@ -94,18 +100,28 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        ## residual connection
+        self.proj = nn.Linear(n_embed, n_embed) # num_heads*head_size
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.dropout(self.proj(out))
+        return out
+    
 
 class FeedForward(nn.Module):
     """ a simple linear layer followed by a non-linearity """    
+    ## feed-forward layer multiply num_embed by 4, according to the paper
 
     def __init__(self, n_embed):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embed, n_embed),
+            nn.Linear(n_embed, 4 * n_embed),
             nn.ReLU(), # non-linearity
+            ## residual connection
+            nn.Linear(4 * n_embed, n_embed),
+            nn.Dropout(dropout)
         )
     
     def forward(self, x):
@@ -121,10 +137,16 @@ class Block(nn.Module):
         head_size = n_embed // n_head
         self.sa = MultiHeadAttention(n_head, head_size)
         self.ffwd = FeedForward(n_embed)
+        ## pre-norm formulation, add normalization before the transformer, while the original paper add after
+        self.ln1 = nn.LayerNorm(n_embed) # default dim=1. normalize features for each sample
+        self.ln2 = nn.LayerNorm(n_embed)
 
     def forward(self, x):
-        x = self.sa(x)
-        x = self.ffwd(x)
+        # x = self.sa(x)
+        # x = self.ffwd(x)
+        ## residual connection
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))        
         return x
         
 
@@ -144,14 +166,16 @@ class BigramLanguageModel(nn.Module):
         # ## v1: self-attention
         # # self.sa_head = Head(n_embed)
         # ## v2: multi-head self-attention, kind of like a group convolution
-        self.sa_head = MultiHeadAttention(num_heads=4, head_size=n_embed//4) # i.e., 4 heads of 8-dim self-attention
-        self.ffwd = FeedForward(n_embed)
-
+        # self.sa_head = MultiHeadAttention(num_heads=4, head_size=n_embed//4) # i.e., 4 heads of 8-dim self-attention
+        # self.ffwd = FeedForward(n_embed)
+        ## v3: block
         # self.blocks = nn.Sequential(
         #     Block(n_embed, n_head=4),
         #     Block(n_embed, n_head=4),
         #     Block(n_embed, n_head=4),
         # )
+        self.blocks = nn.Sequential(*[Block(n_embed, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embed) ## final layer normalization
         self.lm_head = nn.Linear(n_embed, vocab_size)
 
 
@@ -164,8 +188,10 @@ class BigramLanguageModel(nn.Module):
         token_embed = self.token_embedding_table(idx) # (B,T,C): C: n_embed
         pos_embed = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
         x = token_embed + pos_embed # (B, T, C)
-        x = self.sa_head(x) # apply one head of self-attention (B,T,C)
-        x = self.ffwd(x) # apply feed-forward layer (B,T,C)
+        # x = self.sa_head(x) # apply one head of self-attention (B,T,C)
+        # x = self.ffwd(x) # apply feed-forward layer (B,T,C)
+        x = self.blocks(x) # apply feed-forward layer (B,T,C)
+        x = self.ln_f(x) # B, T, c
         logits = self.lm_head(x) # (B,T,C): C: vocab_size
 
         if targets is None:
