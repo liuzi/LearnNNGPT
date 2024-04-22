@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-## TODO: convert to self-attention model 1:02:47
+## convert to self-attention model 1:02:47
 # hyperparameters
 batch_size = 64 #32 # how many independent sequences will we process in parallel?
 block_size = 256 #8 # what is the maximum context length for predictions?
@@ -39,6 +39,8 @@ n = int(0.9*len(data)) # first 90% will be train, rest val
 train_data = data[:n]
 val_data = data[n:]
 
+## NOTE:I 1)load batch, randomly get id of batch size, and use id to get samples from original data
+## 2) X and Y are of same size
 # data loading
 def get_batch(split):
     # generate a small batch of data of inputs x and targets y
@@ -63,6 +65,7 @@ def estimate_loss():
     model.train()
     return out
 
+## NOTE: 1) self-attention,
 class Head(nn.Module):
     """ one head of self-attention"""
 
@@ -93,7 +96,8 @@ class Head(nn.Module):
         v = self.value(x) # (B,T,C) -> (B,T,H)
         out = wei @ v # (B,T,T) @ (B,T,H) -> (B,T,H)
         return out
-    
+
+ ## NOTE: 2) multi-head self-attention, 
 class MultiHeadAttention(nn.Module):
     """ multiple heads of self-attention in parallel """
 
@@ -101,7 +105,7 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         ## residual connection
-        self.proj = nn.Linear(n_embed, n_embed) # num_heads*head_size
+        self.proj = nn.Linear(n_embed, n_embed) # n_embed = num_heads*head_size
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
@@ -109,7 +113,7 @@ class MultiHeadAttention(nn.Module):
         out = self.dropout(self.proj(out))
         return out
     
-
+## NOTE: 3) Feedforward for block 
 class FeedForward(nn.Module):
     """ a simple linear layer followed by a non-linearity """    
     ## feed-forward layer multiply num_embed by 4, according to the paper
@@ -127,7 +131,8 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-## TODO: solve optimiation problem of deep NN, using residual connection, 1:29:00    
+## NOTE: 3) block 
+## solve optimiation problem of deep NN, using residual connection, 1:29:00    
 class Block(nn.Module):
     """ Transformer block: communication followed by computation """
 
@@ -150,8 +155,8 @@ class Block(nn.Module):
         return x
         
 
-# super simple bigram model
-class BigramLanguageModel(nn.Module):
+## NOTE: code GPT model from previous simple bigram model
+class GPT(nn.Module):
 
     def __init__(self):
         super().__init__()
@@ -191,8 +196,8 @@ class BigramLanguageModel(nn.Module):
         # x = self.sa_head(x) # apply one head of self-attention (B,T,C)
         # x = self.ffwd(x) # apply feed-forward layer (B,T,C)
         x = self.blocks(x) # apply feed-forward layer (B,T,C)
-        x = self.ln_f(x) # B, T, c
-        logits = self.lm_head(x) # (B,T,C): C: vocab_size
+        x = self.ln_f(x) # B, T, C
+        logits = self.lm_head(x) # (B,T,V): V: vocab_size
 
         if targets is None:
             loss = None
@@ -209,20 +214,21 @@ class BigramLanguageModel(nn.Module):
         for _ in range(max_new_tokens):
             # crop idx to the last block_size tokens
             ## posistion embedding only have block_size
+            ## get the recent block_size tokens
             idx_cond = idx[:, -block_size:]
             # get the predictions
-            logits, loss = self(idx_cond) # self(idex)
+            logits, _ = self(idx_cond) # self(idex), (B, T, V)
             # focus only on the last time step
-            logits = logits[:, -1, :] # becomes (B, C)
+            logits = logits[:, -1, :] # becomes (B, V)
             # apply softmax to get probabilities
-            probs = F.softmax(logits, dim=-1) # (B, C)
+            probs = F.softmax(logits, dim=-1) # (B, V)
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
         return idx
 
-model = BigramLanguageModel()
+model = GPT()
 m = model.to(device)
 
 # create a PyTorch optimizer
