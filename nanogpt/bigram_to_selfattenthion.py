@@ -85,9 +85,10 @@ class Head(nn.Module):
         # output of size (batch, time-step, head size)
         B,T,C = x.shape
         k =self.key(x) # (B,T,C) -> (B,T,H)
+        H = k.shape[-1]
         q = self.query(x) # (B,T,C) -> (B,T,H)
         ## compute atteintion scores ("affinities")
-        wei = q @ k.transpose(-2, -1) * C**-0.5 # (B,T,H) @ (B,H,T) -> (B,T,T)
+        wei = q @ k.transpose(-2, -1) * H**-0.5 # (B,T,H) @ (B,H,T) -> (B,T,T)
         ## decoder blocl, feature doesn't communicate with the past
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T), higher triangular mask
         wei = F.softmax(wei, dim=-1) # (B, T, T)
